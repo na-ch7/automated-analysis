@@ -1,12 +1,12 @@
 import pandas as pd
-import base64
 import matplotlib.pyplot as plt
-from sklearn.cluster import KMeans
 import seaborn as sns
+from dotenv import load_dotenv
 import requests
 import json
 import sys
 import os
+from scipy.stats import pearsonr
 
 if len(sys.argv) != 2:
     print("Usage: uv run autolysis.py dataset.csv")
@@ -34,115 +34,109 @@ def analyze_csv(file_name):
     }
     return data, summary
 
-# Specialized analysis functions
-def outlier_detection(data, column):
-    plt.figure(figsize=(8, 4))
-    sns.boxplot(x=data[column])
-    plt.title(f"Outlier Analysis for {column}")
-    file_path = os.path.join(output_dir, f"outlier_analysis_{column}.png")
+def correlation_matrix(data):
+    df = pd.DataFrame(data)
+    numeric_columns = df.select_dtypes(include=['number'])
+    correlation = numeric_columns.corr()
+    plt.figure(figsize=(10, 8))
+    sns.heatmap(correlation, annot=True, cmap='coolwarm', fmt='.2f', linewidths=0.5)
+    plt.title("Correlation Matrix of Numerical Columns")
+    file_path = os.path.join(output_dir, "correlation_matrix.png")
     plt.savefig(file_path)
     plt.close()
     return file_path
 
 def correlation_analysis(data, column1, column2):
+    if column1 not in data.columns or column2 not in data.columns:
+        return None, "One or both columns are not in the dataset."
+    
+    correlation_coefficient, p_value = pearsonr(data[column1], data[column2])
+    
+    # Check for statistical significance (typically p < 0.05)
+    significance = "statistically significant" if p_value < 0.05 else "not statistically significant"
+    
+    # Create a scatter plot of the correlation
     plt.figure(figsize=(8, 6))
     sns.scatterplot(x=data[column1], y=data[column2])
     plt.title(f"Correlation Analysis: {column1} vs {column2}")
     file_path = os.path.join(output_dir, f"correlation_analysis_{column1}_vs_{column2}.png")
     plt.savefig(file_path)
     plt.close()
-    return file_path
-
-def clustering_analysis(data, columns):
-    cluster_data = data[columns].dropna()
-    kmeans = KMeans(n_clusters=3, random_state=42).fit(cluster_data)
-    cluster_data["Cluster"] = kmeans.labels_
-    # Visualization
-    plt.figure(figsize=(8, 6))
-    sns.scatterplot(x=cluster_data[columns[0]], y=cluster_data[columns[1]], hue=cluster_data["Cluster"], palette="viridis")
-    plt.title(f"Clustering Analysis: {columns[0]} vs {columns[1]}")
-    file_path = os.path.join(output_dir, f"clustering_analysis_{columns[0]}_vs_{columns[1]}.png")
-    plt.savefig(file_path)
-    plt.close()
-    return file_path
-
-function_descriptions = [
-    {
-        "name": "outlier_detection",
-        "description": "Detects and visualizes outliers in a specified column of the dataset.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "column": {
-                    "type": "string",
-                    "description": "The name of the column to analyze for outliers."
-                }
-            },
-            "required": ["column"]
-        }
-    },
-    {
-        "name": "correlation_analysis",
-        "description": "Performs correlation analysis between two columns and visualizes the relationship.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "column1": {
-                    "type": "string",
-                    "description": "The name of the first column."
-                },
-                "column2": {
-                    "type": "string",
-                    "description": "The name of the second column."
-                }
-            },
-            "required": ["column1", "column2"]
-        }
-    },
-    {
-        "name": "clustering_analysis",
-        "description": "Performs clustering analysis on specified columns and visualizes the clusters.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "columns": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    },
-                    "description": "The list of column names to use for clustering analysis."
-                }
-            },
-            "required": ["columns"]
-        }
+    
+    # Return the correlation results and the path to the generated chart
+    result = {
+        "correlation_coefficient": correlation_coefficient,
+        "p_value": p_value,
+        "significance": significance,
+        "chart_path": file_path
     }
-]
+    
+    return result
 
-# Function to send a request to LLM for summaries and function call suggestions
-def ask_llm_for_analysis(summary, api_url, api_key):
+# Function to send a request to LLM for summary and function call
+def llm_argument_generation(data, api_url, api_key):
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {api_key}",
     }
     prompt = (
-        f"Analyse this data: {json.dumps(summary)}, and give a concise summary. "
-        "For specialized analysis, call one of the functions with relevant parameters (columns of the dataset)."
+        "Give a JSON of column_pairs array of upto 4 column pairs on which correlation analysis would be useful."
     )
+    schema = {
+        "type": "object",
+        "properties": {
+            "column_pairs": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                "column1": {
+                    "type": "string",
+                    "description": "The name of the first column for correlation analysis."
+                },
+                "column2": {
+                    "type": "string",
+                    "description": "The name of the second column for correlation analysis."
+                }
+                },
+                "required": ["column1", "column2"],
+                "additionalProperties": False
+            },
+            "description": "An array of objects where each object represents a pair of columns for correlation analysis."
+            }
+        },
+        "required": ["column_pairs"],
+        "additionalProperties": False
+    }
     payload = {
         "model": "gpt-4o-mini",
-        "messages": [{"role": "user", "content": prompt}],
-        "functions": function_descriptions,
-        "function_call": "auto",
-        "max_tokens": 1000,
+        "response_format": {
+            "type": "json_schema", 
+            "json_schema": {
+                "name": "correlation_analysis_schema",
+                "schema": schema}
+        },
+        "messages": [
+            {
+                "role": "system", 
+                "content": prompt
+            },
+            {
+                "role": "user", 
+                "content": json.dumps({col: str(dtype) for col, dtype in data.dtypes.to_dict().items()})
+
+            },
+            ],
+        "max_tokens": 500,
     }
     try:
         response = requests.post(api_url, headers=headers, json=payload)
-        response.raise_for_status()
-        data = response.json()
+        result = response.json()
 
-        print("Full Response:", json.dumps(data, indent=2))
-        if "choices" in data and data["choices"]:
-                return data["choices"][0]["message"]
+
+        print("Full Response:", json.dumps(result, indent=2))
+        if "choices" in result and result["choices"]:
+                return json.loads(result["choices"][0]["message"]["content"])
         else:
                 print("No valid response from LLM.")
                 return None
@@ -150,100 +144,78 @@ def ask_llm_for_analysis(summary, api_url, api_key):
         print(f"Error communicating with the LLM: {e}")
         return None
 
-def encode_image(image_path):
-    with open(image_path, "rb") as image_file:
-        return base64.b64encode(image_file.read()).decode('utf-8')
-
 # Create a Markdown report
-def create_readme(analysis, charts, api_key, url):
+def create_readme(summary, corr_analysis, charts, api_key, url):
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {api_key}",
     }
-    #chart_descriptions = ""
-    for chart in charts:
-        base64_image = encode_image(chart)  # Get base64 string of the image
-        #chart_descriptions += f"![Chart](data:image/png;base64,{base64_image})\n"
-    
     prompt = (
-            f"Analyze this information: {analysis}. Use the attached charts below to create a concise and engaging "
+            f"As a creative data analyst, use the summary and correlation details to create markdown text for a concise and engaging "
             "narrative that includes a description of the data, analysis performed, insights discovered, and implications "
-            f"of the findings" #Attached Charts:\n{chart_descriptions}
+            f"of the findings."
     )
 
     payload = {
         "model": "gpt-4o-mini",
         "messages": [
             {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": prompt
-                    },
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/png;base64,{base64_image}",
-                            "detail": "low"
-                        }
-                    }
-                ]
-            }
-        ],
+                "role": "system", 
+                "content": prompt
+            },
+            {
+                "role": "user", 
+                "content": f"Summary: {summary}\n\nCorrelation Analysis: {corr_analysis}"
+            },
+            ],
         "max_tokens": 1000,
     }
     try:
-        response = requests.post(url, headers=headers, data={"payload": json.dumps(payload)})
-        response.raise_for_status()
-        readme = response.json()["choices"][0]["message"]["content"]
+        response = requests.post(url, headers=headers, json=payload)
+        readme_text = response.json()["choices"][0]["message"]["content"]
     except requests.exceptions.RequestException as e:
         print(f"Error communicating with the LLM: {e}")
         return None
+    
+    readme_path = os.path.join(output_dir, "README.md")
 
-    with open("README.md", "w") as readme_file:
-        readme_file.write("# Analysis Summary of {filename}\n\n")
-        readme_file.write(f"{readme}\n\n")
-        readme_file.write("## Charts\n")
+    with open(readme_path, "w") as readme_file:
+        readme_file.write(f"{readme_text}\n\n")
+        readme_file.write("## Visualization: \n")
         for chart in charts:
             readme_file.write(f"![{chart}]({chart})\n")
 
 def main():
-
+    load_dotenv()
     api_key = os.environ.get("AIPROXY_TOKEN")
+    api_url = "http://aiproxy.sanand.workers.dev/openai/v1/chat/completions"
+
     if not api_key:
         print("API key not found. Please set the AIPROXY_TOKEN environment variable.")
         sys.exit(1)
-    print(api_key)
-    api_url = "https://aiproxy.sanand.workers.dev/openai/"
 
     data, summary = analyze_csv(file_name)
     if summary is None:
         sys.exit(1)
     
-    analysis = ask_llm_for_analysis(summary, api_url, api_key)
-    if not analysis:
-        print("Failed to get analysis from LLM.")
+    arguments = llm_argument_generation(data, api_url, api_key)
+    if not arguments:
+        print("Failed to get arguments from LLM.")
         sys.exit(1)
 
-    function_calls = []
     charts = []
-    if "function_call" in analysis:
-        function_call = analysis["function_call"]
-        function_name = function_call["name"]
-        function_args = json.loads(function_call["arguments"])
+    file_path = correlation_matrix(data)
+    charts.append(file_path)
+    pairs = arguments["column_pairs"]
+    for pair in pairs:
+        c1 = pair["column1"]
+        c2 = pair["column2"]
+        result = correlation_analysis(data, c1, c2)
+        pair["correlation_analysis"] = result
+        charts.append(result["chart_path"])
 
-        try:
-            selected_function = globals()[function_name]
-            chart_path = selected_function(data, **function_args)
-            charts.append(chart_path)
-            function_calls.append(f"{function_name}: {function_args}")
-        except Exception as e:
-            print(f"Error executing function {function_name}: {e}")
-    else:
-        print("No specialized analysis suggested by LLM.")
     try:
-        create_readme(analysis, charts, api_key, api_url)
+        create_readme(summary, arguments, charts, api_key, api_url)
         print("README.md generated successfully.")
     except Exception as e:
         print(f"Error generating README: {e}")
