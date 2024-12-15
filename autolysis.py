@@ -2,6 +2,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 from dotenv import load_dotenv
+import chardet
 import requests
 import json
 import sys
@@ -20,7 +21,11 @@ os.makedirs(output_dir, exist_ok=True)
 # Function to perform generic analysis on the CSV
 def analyze_csv(file_name):
     try:
-        data = pd.read_csv(file_name)
+        with open(file_name, 'rb') as f:
+            result = chardet.detect(f.read())
+            encoding = result['encoding']
+
+        data = pd.read_csv(file_name, encoding=encoding)
     except Exception as e:
         print(f"Error reading the CSV file: {e}")
         return None, None
@@ -49,7 +54,19 @@ def correlation_matrix(data):
 def correlation_analysis(data, column1, column2):
     if column1 not in data.columns or column2 not in data.columns:
         return None, "One or both columns are not in the dataset."
+    data[column1] = pd.to_numeric(data[column1], errors='coerce')
+    data[column2] = pd.to_numeric(data[column2], errors='coerce')
+
+    data_cleaned = data.dropna(subset=[column1, column2])
+
+    if data[column1].dtype != 'float64' and data[column1].dtype != 'int64':
+        raise ValueError(f"Column {column1} is not numeric after conversion.")
+    if data[column2].dtype != 'float64' and data[column2].dtype != 'int64':
+        raise ValueError(f"Column {column2} is not numeric after conversion.")
     
+    if len(data_cleaned[column1]) < 2 or len(data_cleaned[column2]) < 2:
+        return {"insufficient data for correlation - skip in analysis"}
+
     correlation_coefficient, p_value = pearsonr(data[column1], data[column2])
     
     # Check for statistical significance (typically p < 0.05)
@@ -211,8 +228,9 @@ def main():
         c1 = pair["column1"]
         c2 = pair["column2"]
         result = correlation_analysis(data, c1, c2)
-        pair["correlation_analysis"] = result
-        charts.append(result["chart_path"])
+        if "correlation_analysis" in result:
+            pair["correlation_analysis"] = result
+            charts.append(result["chart_path"])
 
     try:
         create_readme(summary, arguments, charts, api_key, api_url)
