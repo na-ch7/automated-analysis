@@ -1,3 +1,15 @@
+dependencies = [
+    "pandas",
+    "matplotlib",
+    "seaborn",
+    "dotenv",
+    "chardet",
+    "requests",
+    "json",
+    "sys",
+    "os"
+    "scipy.stats"
+]
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
