@@ -5,13 +5,10 @@
 #     "pandas",
 #     "matplotlib",
 #     "seaborn",
-#     "dotenv",
+#     "python-dotenv",
 #     "chardet",
 #     "requests",
-#     "json",
-#     "sys",
-#     "os",
-#     "scipy.stats"
+#     "scipy"
 # ]
 # ///
 
